@@ -103,6 +103,7 @@ body{font-family:'Segoe UI',Roboto,Arial,sans-serif;background:#e8f0f8;color:#1a
   <button class="fbtn" id="map-toggle" onclick="toggleBasemap()">🛰 SATELLITE</button>
   <span class="fsep">|</span>
   <button class="fbtn" onclick="map.setView([35.9,-100.3],8)">⌖ RESET VIEW</button>
+  <button class="fbtn" onclick="exportRouteData()">⬇ EXPORT ROUTE DATA</button>
 </div>
 <div id="body">
   <div id="map"></div>
@@ -312,121 +313,23 @@ function showInfo(w){
 
 L.control.scale({imperial:true,metric:false}).addTo(map);
 
-// ── Polygon Selection Tool ──────────────────────────────────────────────────
-let selActive=false,polyPts=[],polyLine=null,polyFinal=null;
-
-const selBtn=document.createElement('button');
-selBtn.className='fbtn';selBtn.textContent='⬡ SELECT POLYGON';selBtn.onclick=toggleSelect;
-document.getElementById('filterbar').appendChild(selBtn);
-
-const selHint=document.createElement('div');
-selHint.style.cssText='display:none;position:fixed;bottom:36px;left:50%;transform:translateX(-50%);background:#1a4a8a;color:#fff;padding:5px 14px;border-radius:20px;font-size:12px;letter-spacing:0.5px;z-index:9000;pointer-events:none;box-shadow:0 2px 8px rgba(0,60,120,0.3);';
-selHint.textContent='Click to add points · Double-click or click start to close · Esc to cancel';
-document.body.appendChild(selHint);
-
-const popup=document.createElement('div');
-popup.style.cssText='display:none;position:fixed;z-index:9999;background:rgba(255,255,255,0.98);border:2px solid #1a4a8a;border-radius:6px;padding:12px 16px;font-family:Courier New,monospace;font-size:11px;color:#1a3a5c;min-width:210px;box-shadow:0 4px 20px rgba(0,60,120,0.2);';
-document.body.appendChild(popup);
-
-function toggleSelect(){
-  selActive=!selActive;
-  selBtn.classList.toggle('on',selActive);
-  selBtn.textContent=selActive?'✕ CANCEL':'⬡ SELECT POLYGON';
-  selHint.style.display=selActive?'block':'none';
-  map.getContainer().style.cursor=selActive?'crosshair':'';
-  if(!selActive)clearSel();
+// ── Export Route Data ────────────────────────────────────────────────────────
+function exportRouteData(){
+  const header=['Well Name','API','Route','Active','Company'];
+  const rows=WELLS.map(w=>[
+    '"'+(w.name||'').replace(/"/g,'""')+'"',
+    '"'+(w.api||'')+'"',
+    '"'+(w.route||'')+'"',
+    '"'+(w.activity||'')+'"',
+    '"'+(w.entity||'')+'"'
+  ].join(','));
+  const csv=[header.join(','),...rows].join('\n');
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='route_data_export.csv';a.click();
+  URL.revokeObjectURL(url);
 }
-
-function clearSel(){
-  polyPts=[];
-  if(polyLine){map.removeLayer(polyLine);polyLine=null;}
-  if(polyFinal){map.removeLayer(polyFinal);polyFinal=null;}
-  popup.style.display='none';
-}
-
-function ptInPoly(pt,poly){
-  let inside=false;
-  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
-    const xi=poly[i][1],yi=poly[i][0],xj=poly[j][1],yj=poly[j][0];
-    if(((yi>pt[0])!==(yj>pt[0]))&&(pt[1]<(xj-xi)*(pt[0]-yi)/(yj-yi)+xi)) inside=!inside;
-  }
-  return inside;
-}
-
-function closePoly(){
-  if(polyPts.length<3)return;
-  if(polyLine){map.removeLayer(polyLine);polyLine=null;}
-  const c='#1a4a8a';
-  polyFinal=L.polygon(polyPts,{color:c,weight:2,fillColor:c,fillOpacity:0.08,dashArray:''}).addTo(map);
-  // Count wells
-  let active=0,si=0,eqvA=0,eqvSI=0,preA=0,preSI=0;
-  const rc={};
-  mObjs.forEach(o=>{
-    if(!vis(o.w)||!o.w.lat||!o.w.lon)return;
-    if(!ptInPoly([o.w.lat,o.w.lon],polyPts))return;
-    if(o.w.activity==='Active'){active++;o.w.entity==='EQV'?eqvA++:preA++;}
-    else{si++;o.w.entity==='EQV'?eqvSI++:preSI++;}
-    if(o.w.route){if(!rc[o.w.route])rc[o.w.route]={active:0,si:0};o.w.activity==='Active'?rc[o.w.route].active++:rc[o.w.route].si++;}
-  });
-  const total=active+si;
-  const topR=Object.entries(rc).sort((a,b)=>(b[1].active+b[1].si)-(a[1].active+a[1].si)).slice(0,6);
-  const rRows=topR.map(([r,c])=>`<div style="display:flex;align-items:center;gap:5px;margin-bottom:2px;"><div style="width:8px;height:8px;border-radius:2px;background:${gc(r)};flex-shrink:0;border:1px solid rgba(0,0,0,0.1);"></div><span style="flex:1;color:#2a5a8a;">${r}</span><span style="color:#1a7a30;font-weight:600;">${c.active}</span><span style="color:#8a7a5a;">(${c.si})</span></div>`).join('');
-  const moreR=Object.keys(rc).length>6?`<div style="color:#90b8dc;font-size:9px;margin-top:2px;">+${Object.keys(rc).length-6} more routes</div>`:'';
-  popup.innerHTML=total===0
-    ?'<div style="color:#90b8dc;font-size:10px;">No visible wells in selection</div><div style="margin-top:6px;cursor:pointer;color:#1a4a8a;font-size:9px;" onclick="clearSel()">✕ Clear</div>'
-    :`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-       <span style="color:#1a4a8a;font-size:12px;letter-spacing:1px;font-weight:700;">SELECTION</span>
-       <span style="cursor:pointer;color:#90b8dc;font-size:13px;" onclick="clearSel()">✕</span>
-     </div>
-     <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px;">
-       <div style="background:#eaf4ee;border:1.5px solid #80d0a0;border-radius:4px;padding:5px;text-align:center;"><div style="font-size:22px;font-weight:700;color:#1a7a30;">${active}</div><div style="font-size:10px;color:#5a90a0;letter-spacing:0.5px;">PRODUCING</div></div>
-       <div style="background:#fef0e4;border:1.5px solid #e0a060;border-radius:4px;padding:5px;text-align:center;"><div style="font-size:22px;font-weight:700;color:#c06010;">${si}</div><div style="font-size:10px;color:#5a90a0;letter-spacing:0.5px;">SI</div></div>
-       <div style="background:#e8f2fc;border:1.5px solid #80aadc;border-radius:4px;padding:5px;text-align:center;"><div style="font-size:15px;font-weight:700;color:#1a4a8a;">${eqvA}<span style="color:#90b8dc;font-size:10px;">(${eqvSI})</span></div><div style="font-size:10px;color:#5a90a0;letter-spacing:0.5px;">EQV</div></div>
-       <div style="background:#f4eafc;border:1.5px solid #c090dc;border-radius:4px;padding:5px;text-align:center;"><div style="font-size:15px;font-weight:700;color:#7a1a8a;">${preA}<span style="color:#c0a0dc;font-size:10px;">(${preSI})</span></div><div style="font-size:10px;color:#5a90a0;letter-spacing:0.5px;">PRESIDIO</div></div>
-     </div>
-     <div style="font-size:11px;letter-spacing:0.5px;color:#1a4a8a;margin-bottom:5px;border-bottom:1.5px solid #b0cce8;padding-bottom:3px;font-weight:700;">ROUTES IN AREA</div>
-     ${rRows}${moreR}
-     <div style="margin-top:6px;font-size:11px;color:#90b8dc;">${total} total &nbsp;·&nbsp; ${Object.keys(rc).length} routes</div>`;
-  // Position popup near top-right of polygon bbox
-  const bounds=polyFinal.getBounds();
-  const px=map.latLngToContainerPoint(bounds.getNorthEast());
-  const cr=map.getContainer().getBoundingClientRect();
-  let left=cr.left+px.x+12,top=cr.top+px.y;
-  popup.style.display='block';
-  const pw=popup.offsetWidth||220,ph=popup.offsetHeight||200;
-  if(left+pw>window.innerWidth-10) left=cr.left+map.latLngToContainerPoint(bounds.getNorthWest()).x-pw-12;
-  if(top+ph>window.innerHeight-10) top=window.innerHeight-ph-10;
-  if(top<5) top=5;
-  popup.style.left=left+'px';popup.style.top=top+'px';
-  // Exit select mode
-  selActive=false;selBtn.classList.remove('on');selBtn.textContent='⬡ SELECT POLYGON';
-  selHint.style.display='none';map.getContainer().style.cursor='';
-  polyPts=[];
-}
-
-map.on('click',function(e){
-  if(!selActive)return;
-  // If clicking near first point, close
-  if(polyPts.length>=3){
-    const first=map.latLngToContainerPoint(polyPts[0]);
-    const cur=map.latLngToContainerPoint(e.latlng);
-    if(Math.hypot(first.x-cur.x,first.y-cur.y)<12){closePoly();return;}
-  }
-  polyPts.push(e.latlng);
-  // Draw in-progress polyline
-  if(polyLine)map.removeLayer(polyLine);
-  if(polyPts.length>1) polyLine=L.polyline(polyPts,{color:'#1a4a8a',weight:2,dashArray:'6 4'}).addTo(map);
-  // First-point indicator
-  if(polyPts.length===1) L.circleMarker(polyPts[0],{radius:5,fillColor:'#1a4a8a',color:'#fff',weight:2,fillOpacity:1,interactive:false}).addTo(map);
-});
-
-map.on('dblclick',function(e){
-  if(!selActive||polyPts.length<3)return;
-  L.DomEvent.stopPropagation(e);
-  closePoly();
-});
-
-document.addEventListener('keydown',function(e){if(e.key==='Escape'&&selActive)toggleSelect();});
 </script>
 </body>
 </html>
